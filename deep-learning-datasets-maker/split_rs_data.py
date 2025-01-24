@@ -51,11 +51,11 @@ from .split_rs_data_dialog import SplitRSDataDialog
 import os
 import os.path as osp
 from .utils import *
-from .utils.rasterSplittingTask import start_task, RasterSplittingTask
+from .utils.rasterSplittingTask import RasterSplittingTask
 from .utils.COCO import clip_from_file, slice, from_mask_to_coco
 
 # import argparse
-MESSAGE_CATEGORY = 'COVISART Split:'
+MESSAGE_CATEGORY = 'Dataset:'
 
 class SplitRSData:
     """QGIS Plugin Implementation."""
@@ -330,7 +330,7 @@ class SplitRSData:
                 level=Qgis.Info,
                 duration=5,
             )
-            iface.addRasterLayer(output, "deepbands-datasets")
+            #iface.addRasterLayer(output, "deepbands-datasets")
 
             fn_ras_path = fn_ras.dataProvider().dataSourceUri()
 
@@ -344,37 +344,31 @@ class SplitRSData:
             #name of selected raster layer
             feedback.pushInfo("currentrasterlay : " + currentrasterlay)
 
-            def task1_finished(result):
-                if result:
-                    QgsMessageLog.logMessage("Task 1 completed, starting Task 2.", MESSAGE_CATEGORY, Qgis.Info)
-                    # Task 2'yi başlat
-                    task2 = RasterSplittingTask(
-                        "Labels",
-                        output,  # İkinci raster yolu
-                        label_Paddle_path,
-                        "png",
-                        "PNG",
-                        SplittingSize,
-                        SplittingSize,
-                        currentrasterlay
-                    )
-                    QgsApplication.taskManager().addTask(task2)
-                else:
-                    QgsMessageLog.logMessage("Task 1 failed. Task 2 will not start.", MESSAGE_CATEGORY, Qgis.Warning)
-            # Görev başlatma
-            task1 = RasterSplittingTask(
-                "Images",
-                fn_ras_path,  # İlk raster yolu
-                image_Paddle_path,
-                "png",
-                "PNG",
-                SplittingSize,
-                SplittingSize,
-                currentrasterlay
+            # Task 2 parametreleri
+            task2_params = (
+                "Images",             # op_name
+                fn_ras_path,          # İlk raster yolu
+                image_Paddle_path,    # Çıktı yolu
+                "png",                # Dosya uzantısı
+                "PNG",                # Format
+                SplittingSize,        # Genişlik
+                SplittingSize,        # Yükseklik
+                currentrasterlay      # Dosya adı
             )
-            task1.taskCompleted.connect(task1_finished)  # Task 1 tamamlandığında çağrılır
-            QgsApplication.taskManager().addTask(task1)
-            QgsMessageLog.logMessage(f"Task started: Images", MESSAGE_CATEGORY, Qgis.Info)
+            # Görev başlatma
+            self.task1 = RasterSplittingTask(
+                "Labels",             # op_name
+                output,               # İkinci raster yolu
+                label_Paddle_path,    # Çıktı yolu
+                "png",                # Dosya uzantısı
+                "PNG",                # Format
+                SplittingSize,        # Genişlik
+                SplittingSize,        # Yükseklik
+                currentrasterlay,     # Dosya adı
+                next_task_params=task2_params  # Task 2 parametreleri
+            )
+            QgsApplication.taskManager().addTask(self.task1)
+            QgsMessageLog.logMessage(f"Task started: Labels", MESSAGE_CATEGORY, Qgis.Info)
 
             # ** Ins Seg with OPENCV **
 

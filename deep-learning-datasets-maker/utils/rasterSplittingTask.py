@@ -8,7 +8,7 @@ from qgis.core import (
     QgsApplication
 )
 import uuid
-MESSAGE_CATEGORY = 'COVISART'
+MESSAGE_CATEGORY = 'RasterSplittingTask'
 
 def scale_to_percentage(value, max_value):
     if max_value == 0:
@@ -18,9 +18,9 @@ def scale_to_percentage(value, max_value):
     return (value / max_value) * 100
 
 class RasterSplittingTask(QgsTask):
-    def __init__(self,op_name, fn_ras, cdpath, frmt_ext, imgfrmat, needed_out_x, needed_out_y, file_name):
+    def __init__(self, op_name, fn_ras, cdpath, frmt_ext, imgfrmat, needed_out_x, needed_out_y, file_name, next_task_params=None):
         super().__init__("Raster Splitting Task: " + op_name, QgsTask.CanCancel)
-        self.op_name = op_name,
+        self.op_name = op_name
         self.fn_ras = fn_ras
         self.cdpath = cdpath
         self.frmt_ext = frmt_ext
@@ -28,7 +28,7 @@ class RasterSplittingTask(QgsTask):
         self.needed_out_x = needed_out_x
         self.needed_out_y = needed_out_y
         self.file_name = file_name
-
+        self.next_task_params = next_task_params  # Bir sonraki görev için parametreler
     def run(self):
         try:
             ds = gdal.Open(self.fn_ras)
@@ -76,12 +76,12 @@ class RasterSplittingTask(QgsTask):
                         'xRes': resx,
                         'yRes': resy,
                         'outputType': gdal.gdalconst.GDT_Byte,
-                        'format': self.imgfrmat
+                        'format': self.imgfrmat,
+                        'creationOptions': ['NUM_THREADS=ALL_CPUS']
                     }
                     gdal.Translate(savePath, ds, **kwargs)
                 
                 self.setProgress(scale_to_percentage(i, xround))
-
             ds = None  # Dataset'i kapatma
             return True  # Görev başarıyla tamamlandı
         except Exception as e:
@@ -89,19 +89,18 @@ class RasterSplittingTask(QgsTask):
             return False
 
     def finished(self, result):
+        QgsMessageLog.logMessage(f"Finished method called for '{self.op_name}'", MESSAGE_CATEGORY, Qgis.Info)
         if result:
-            QgsMessageLog.logMessage("Task completed successfully!", MESSAGE_CATEGORY, Qgis.Success)
+            QgsMessageLog.logMessage(f"Task '{self.op_name}' completed successfully!", MESSAGE_CATEGORY, Qgis.Success)
+            # Bir sonraki görevi başlat
+            if self.next_task_params:
+                next_task = RasterSplittingTask(*self.next_task_params)
+                QgsApplication.taskManager().addTask(next_task)
+                QgsMessageLog.logMessage(f"Task started: {self.next_task_params[0]}", MESSAGE_CATEGORY, Qgis.Info)
         else:
-            QgsMessageLog.logMessage("Task failed or was canceled.", MESSAGE_CATEGORY, Qgis.Warning)
+            QgsMessageLog.logMessage(f"Task '{self.op_name}' failed or was canceled.", MESSAGE_CATEGORY, Qgis.Warning)
+
 
     def cancel(self):
         QgsMessageLog.logMessage("Task canceled by user.", MESSAGE_CATEGORY, Qgis.Warning)
         super().cancel()
-
-# Görev başlatma
-def start_task(op_name,fn_ras, cdpath, frmt_ext, imgfrmat, needed_out_x, needed_out_y, file_name):
-    unique_task_name = f"Raster Splitting Task - {uuid.uuid4()}"
-    task = RasterSplittingTask(op_name,fn_ras, cdpath, frmt_ext, imgfrmat, needed_out_x, needed_out_y, file_name)
-    task.setDescription(unique_task_name)
-    QgsApplication.taskManager().addTask(task)
-    QgsMessageLog.logMessage(f"Task '{unique_task_name}' started: " + op_name, MESSAGE_CATEGORY, Qgis.Info)
