@@ -25,13 +25,21 @@ from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QFileDialog, QTabWidget
 from qgis.core import (
+    QgsApplication,
     QgsMapLayerProxyModel,
     QgsProject,
     QgsProcessingFeedback,
     QgsMessageLog,
     Qgis,
+    QgsProcessingAlgRunnerTask,
+    QgsProcessingContext,
+    QgsTask,
+    QgsTaskManager,
 )
+import random
+from time import sleep
 from qgis.utils import iface
+
 
 # import processing, tempfile
 
@@ -43,10 +51,11 @@ from .split_rs_data_dialog import SplitRSDataDialog
 import os
 import os.path as osp
 from .utils import *
+from .utils.rasterSplittingTask import start_task, RasterSplittingTask
 from .utils.COCO import clip_from_file, slice, from_mask_to_coco
 
 # import argparse
-
+MESSAGE_CATEGORY = 'COVISART Split:'
 
 class SplitRSData:
     """QGIS Plugin Implementation."""
@@ -59,6 +68,8 @@ class SplitRSData:
             application at run time.
         :type iface: QgsInterface
         """
+        self.provider = None
+        
         # Save reference to the QGIS interface
         self.iface = iface
         # initialize plugin directory
@@ -231,7 +242,7 @@ class SplitRSData:
             self.dlg.mOpacityWidget_Validating.setOpacity(1.0 - Training_Set)
         self.dlg.mOpacityWidget_Testing.setOpacity(
             1.0 - (Training_Set + Val_Set))
-
+    
     def run(self):
         """Run method that performs all the real work"""
 
@@ -289,21 +300,23 @@ class SplitRSData:
                     os.makedirs(path)
 
             # PaddlePaddle Dataset Paths
-            dataset_paddle = osp.join(dataset_path, "PaddlePaddle")
+            dataset_paddle = osp.join(dataset_path, "Datasets")
             mkdir_p(dataset_paddle)
 
             Ras_Paddle_path = osp.join(dataset_paddle, "rasterized/")
             output = osp.join(
                 Ras_Paddle_path, currentrasterlay + "_rasterized" + ".tif"
             )  # Output Rasterized File
-            image_Paddle_path = osp.join(dataset_paddle, "image/")
-            label_Paddle_path = osp.join(dataset_paddle, "label/")
+            image_Paddle_path = osp.join(dataset_paddle, "images/")
+            label_Paddle_path = osp.join(dataset_paddle, "labels/")
             InSeg_Paddle_path = osp.join(dataset_paddle, "inseg/")
             mkdir_p(Ras_Paddle_path)
             mkdir_p(image_Paddle_path)
             mkdir_p(label_Paddle_path)
             mkdir_p(InSeg_Paddle_path)
 
+            context = QgsProcessingContext()
+            context.setProject(QgsProject.instance())
             feedback = QgsProcessingFeedback()
             feedback.pushInfo("Raster Path : " + ras_path)
             feedback.pushInfo("Vector Path : " + vec_path)
@@ -311,7 +324,6 @@ class SplitRSData:
             feedback.pushInfo("Imge Splitting Size : " + str(SplittingSize))
 
             # TODO: if shp in memory, it can't work
-
             rasterize(ras_path, vec_path, output)
             iface.messageBar().pushMessage(
                 "You will find the rasterized file in " + output,
@@ -321,26 +333,48 @@ class SplitRSData:
             iface.addRasterLayer(output, "deepbands-datasets")
 
             fn_ras_path = fn_ras.dataProvider().dataSourceUri()
-            splitting(
-                fn_ras_path,
+
+
+            #input raster file path
+            feedback.pushInfo("fn_ras_path : " + fn_ras_path)
+
+            feedback.pushInfo("image_Paddle_path : " + image_Paddle_path)
+            feedback.pushInfo("SplittingSize : " + str(SplittingSize))
+
+            #name of selected raster layer
+            feedback.pushInfo("currentrasterlay : " + currentrasterlay)
+
+            def task1_finished(result):
+                if result:
+                    QgsMessageLog.logMessage("Task 1 completed, starting Task 2.", MESSAGE_CATEGORY, Qgis.Info)
+                    # Task 2'yi başlat
+                    task2 = RasterSplittingTask(
+                        "Labels",
+                        output,  # İkinci raster yolu
+                        label_Paddle_path,
+                        "png",
+                        "PNG",
+                        SplittingSize,
+                        SplittingSize,
+                        currentrasterlay
+                    )
+                    QgsApplication.taskManager().addTask(task2)
+                else:
+                    QgsMessageLog.logMessage("Task 1 failed. Task 2 will not start.", MESSAGE_CATEGORY, Qgis.Warning)
+            # Görev başlatma
+            task1 = RasterSplittingTask(
+                "Images",
+                fn_ras_path,  # İlk raster yolu
                 image_Paddle_path,
-                "jpg",
-                "JPEG",
-                "",
-                SplittingSize,
-                SplittingSize,
-                currentrasterlay,
-            )
-            splitting(
-                output,
-                label_Paddle_path,
                 "png",
                 "PNG",
-                "",
                 SplittingSize,
                 SplittingSize,
-                currentrasterlay,
-            )  # should be the same name of image. vector name if needed-> currentvectorlay
+                currentrasterlay
+            )
+            task1.taskCompleted.connect(task1_finished)  # Task 1 tamamlandığında çağrılır
+            QgsApplication.taskManager().addTask(task1)
+            QgsMessageLog.logMessage(f"Task started: Images", MESSAGE_CATEGORY, Qgis.Info)
 
             # ** Ins Seg with OPENCV **
 
@@ -411,7 +445,7 @@ class SplitRSData:
                     "format": ["jpg", "png"],
                     "postfix": ["", ""],
                 }
-                generate_list(args)
+                #generate_list(args)
 
             if self.dlg.checkBoxCOCO.isChecked():
                 # COCO Dataset Paths
